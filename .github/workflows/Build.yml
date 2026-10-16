@@ -1,0 +1,59 @@
+name: Build PS4 (OpenOrbis)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm build-essential
+
+      - name: Baixar o OpenOrbis (ultima release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dl toolchain
+          gh release download --repo OpenOrbis/OpenOrbis-PS4-Toolchain \
+            --pattern '*.tar.gz' --dir dl
+          ls -la dl
+          for f in dl/*.tar.gz; do tar -xzf "$f" -C toolchain; done
+
+          # acha a pasta do toolchain, mesmo que venha dentro de uma subpasta
+          HELLO=$(find toolchain -type d -path '*/samples/hello_world' | head -n1)
+          test -n "$HELLO" || { echo "samples/hello_world nao encontrado"; ls -R toolchain | head -50; exit 1; }
+          ROOT=$(realpath "$(dirname "$(dirname "$HELLO")")")
+          echo "OO_PS4_TOOLCHAIN=$ROOT" >> "$GITHUB_ENV"
+          chmod -R +x "$ROOT/bin" || true
+          echo "Toolchain em: $ROOT"
+
+      - name: Compilar hello_world
+        run: |
+          cd "$OO_PS4_TOOLCHAIN/samples/hello_world"
+          make
+
+      - name: Juntar saidas
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cd "$OO_PS4_TOOLCHAIN/samples/hello_world"
+          find . \( -name '*.pkg' -o -name 'eboot.bin' -o -name '*.oelf' \) \
+            -exec cp --parents {} "$GITHUB_WORKSPACE/out/" \;
+          ls -R "$GITHUB_WORKSPACE/out"
+
+      - name: Enviar artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps4-hello-world
+          path: out/
+          if-no-files-found: error
