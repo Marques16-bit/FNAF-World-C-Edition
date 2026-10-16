@@ -1,15 +1,19 @@
 name: Build PS4 (OpenOrbis)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # roda pelo celular (aba Actions > Run workflow)
   push:
     branches: [main]
+
+env:
+  GAME_TITLE: "FNaF World"
+  TITLE_ID: "FNAF00001"              # 4 letras + 5 numeros
+  CONTENT_LABEL: "FNAFWORLD0000000"  # exatamente 16 caracteres
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    env:
-      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
 
     steps:
       - name: Checkout
@@ -27,33 +31,57 @@ jobs:
           mkdir -p dl toolchain
           gh release download --repo OpenOrbis/OpenOrbis-PS4-Toolchain \
             --pattern '*.tar.gz' --dir dl
-          ls -la dl
           for f in dl/*.tar.gz; do tar -xzf "$f" -C toolchain; done
 
-          # acha a pasta do toolchain, mesmo que venha dentro de uma subpasta
           HELLO=$(find toolchain -type d -path '*/samples/hello_world' | head -n1)
-          test -n "$HELLO" || { echo "samples/hello_world nao encontrado"; ls -R toolchain | head -50; exit 1; }
+          test -n "$HELLO" || { echo "samples/hello_world nao encontrado"; exit 1; }
           ROOT=$(realpath "$(dirname "$(dirname "$HELLO")")")
           echo "OO_PS4_TOOLCHAIN=$ROOT" >> "$GITHUB_ENV"
           chmod -R +x "$ROOT/bin" || true
-          echo "Toolchain em: $ROOT"
 
-      - name: Compilar hello_world
+      - name: Preparar projeto (nome, ID e icone)
         run: |
-          cd "$OO_PS4_TOOLCHAIN/samples/hello_world"
+          mkdir -p work
+          cp -r "$OO_PS4_TOOLCHAIN/samples/hello_world" work/game
+          cd work/game
+
+          echo "=== Metadados originais do Makefile ==="
+          grep -nE "TITLE|CONTENT_ID|VERSION|BREW|HELLO" Makefile || true
+          echo "=== sce_sys do sample ==="
+          ls -la sce_sys 2>/dev/null || true
+
+          # troca Title ID, Content ID e nome
+          sed -i "s/BREW00083/$TITLE_ID/g; s/HELLOWORLD0*/$CONTENT_LABEL/g" Makefile
+          sed -i -E "s/^(TITLE[[:space:]]*:?=).*/\1 $GAME_TITLE/" Makefile
+
+          # icone: icon.png na raiz do repo vira sce_sys/icon0.png
+          mkdir -p sce_sys
+          if [ -f "$GITHUB_WORKSPACE/icon.png" ]; then
+            cp "$GITHUB_WORKSPACE/icon.png" sce_sys/icon0.png
+            echo "Icone aplicado."
+          else
+            echo "icon.png nao encontrado na raiz do repo; mantendo o icone padrao."
+          fi
+
+          echo "=== Metadados depois da troca ==="
+          grep -nE "TITLE|CONTENT_ID|VERSION" Makefile || true
+
+      - name: Compilar
+        run: |
+          cd work/game
           make
 
       - name: Juntar saidas
         run: |
           mkdir -p "$GITHUB_WORKSPACE/out"
-          cd "$OO_PS4_TOOLCHAIN/samples/hello_world"
-          find . \( -name '*.pkg' -o -name 'eboot.bin' -o -name '*.oelf' \) \
+          cd work/game
+          find . \( -name '*.pkg' -o -name 'eboot.bin' \) \
             -exec cp --parents {} "$GITHUB_WORKSPACE/out/" \;
-          ls -R "$GITHUB_WORKSPACE/out"
+          ls -laR "$GITHUB_WORKSPACE/out"
 
       - name: Enviar artefato
         uses: actions/upload-artifact@v4
         with:
-          name: ps4-hello-world
+          name: fnaf-world-ps4
           path: out/
           if-no-files-found: error
